@@ -1,0 +1,8 @@
+openai-whisper
+pandas
+torch
+openpyxl
+certifi
+numpy
+tkinter
+pillow
