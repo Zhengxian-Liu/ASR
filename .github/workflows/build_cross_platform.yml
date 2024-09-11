@@ -7,49 +7,105 @@ on:
     branches: [ main ]
 
 jobs:
-  build-windows:
-    runs-on: windows-latest
-    steps:
-    - uses: actions/checkout@v2
-    - name: Set up Python
-      uses: actions/setup-python@v2
-      with:
-        python-version: '3.9'
-    - name: Install dependencies
-      run: |
-        python -m pip install --upgrade pip
-        pip install -r requirements.txt
-        pip install pyinstaller
-      continue-on-error: true
-    - name: Build executable
-      run: pyinstaller --onefile --windowed ASR.py
-    - name: Upload artifact
-      uses: actions/upload-artifact@v2
-      with:
-        name: ASR-Windows
-        path: dist/ASR.exe
-
   build-macos:
     runs-on: macos-latest
     steps:
     - uses: actions/checkout@v2
+    
     - name: Set up Python
       uses: actions/setup-python@v2
       with:
         python-version: '3.9'
+    
+    - name: Debug repository contents
+      run: |
+        pwd
+        ls -R
+    
+    - name: Upgrade pip
+      run: python -m pip install --upgrade pip
+    
     - name: Install dependencies
       run: |
-        python -m pip install --upgrade pip
-        pip install -r requirements.txt
+        if [ -f requirements.txt ]; then
+          pip install -r requirements.txt
+        else
+          echo "requirements.txt not found. Creating a basic one."
+          echo "openai-whisper" > requirements.txt
+          echo "pandas" >> requirements.txt
+          echo "torch" >> requirements.txt
+          echo "openpyxl" >> requirements.txt
+          echo "certifi" >> requirements.txt
+          echo "numpy" >> requirements.txt
+          echo "pillow" >> requirements.txt
+          pip install -r requirements.txt
+        fi
         pip install pyinstaller
-      continue-on-error: true
+      
+    - name: Verify installations
+      run: |
+        pip list
+        which pyinstaller
+    
     - name: Build application
       run: |
         pyinstaller --onefile --windowed --name ASR ASR.py
         cd dist
         hdiutil create ./ASR.dmg -srcfolder ASR.app -ov
+    
     - name: Upload artifact
       uses: actions/upload-artifact@v2
       with:
         name: ASR-macOS
         path: dist/ASR.dmg
+
+  build-windows:
+    runs-on: windows-latest
+    steps:
+    - uses: actions/checkout@v2
+    
+    - name: Set up Python
+      uses: actions/setup-python@v2
+      with:
+        python-version: '3.9'
+    
+    - name: Debug repository contents
+      run: |
+        pwd
+        dir /s
+    
+    - name: Upgrade pip
+      run: python -m pip install --upgrade pip
+    
+    - name: Install dependencies
+      run: |
+        if (Test-Path -Path requirements.txt -PathType Leaf) {
+          pip install -r requirements.txt
+        } else {
+          echo "requirements.txt not found. Creating a basic one."
+          @"
+openai-whisper
+pandas
+torch
+openpyxl
+certifi
+numpy
+pillow
+"@ | Out-File -FilePath requirements.txt -Encoding utf8
+          pip install -r requirements.txt
+        }
+        pip install pyinstaller
+      
+    - name: Verify installations
+      run: |
+        pip list
+        where pyinstaller
+    
+    - name: Build executable
+      run: pyinstaller --onefile --windowed ASR.py
+    
+    - name: Upload artifact
+      uses: actions/upload-artifact@v2
+      with:
+        name: ASR-Windows
+        path: dist/ASR.exe
