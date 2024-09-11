@@ -4,5 +4,4 @@ torch
 openpyxl
 certifi
 numpy
-tkinter
 pillow
