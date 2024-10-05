@@ -16,7 +16,9 @@ from tkinter import filedialog, messagebox, ttk
 from pathlib import Path
 import whisper
 from itertools import zip_longest
-
+from transformers import AutoModelForSpeechSeq2Seq, AutoProcessor, pipeline
+import librosa
+import numpy as np
 # Suppress specific warnings
 warnings.filterwarnings("ignore", message="FP16 is not supported on CPU; using FP32 instead")
 
@@ -33,42 +35,47 @@ def create_ssl_context():
 import os
 import torch
 
+import librosa
+import numpy as np
+
 def transcribe_audio_batch(file_paths, progress_callback=None):
-    # Use the custom SSL context
-    ssl_context = create_ssl_context()
-    
-    # Patch urllib to use our custom SSL context
-    original_urlopen = urllib.request.urlopen
-    urllib.request.urlopen = lambda *args, **kwargs: original_urlopen(*args, **kwargs, context=ssl_context)
-    
-    try:
-        # Use a smaller model for faster processing
-        model = whisper.load_model("base", download_root="./models")
+    # Load the model and processor from Hugging Face
+    model_id = "shaunliu82714/whisper-genshin-en-2"
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+    torch_dtype = torch.float16 if torch.cuda.is_available() else torch.float32
+
+    model = AutoModelForSpeechSeq2Seq.from_pretrained(
+        model_id, torch_dtype=torch_dtype, low_cpu_mem_usage=True
+    ).to(device)
+
+    processor = AutoProcessor.from_pretrained(model_id)
+
+    transcriptions = {}
+    start_time = time.time()
+    for i, file_path in enumerate(file_paths):
+        print(f"Transcribing file {i+1}/{len(file_paths)}: {file_path}")
         
-        # Enable GPU acceleration if available
-        device = "cuda" if torch.cuda.is_available() else "cpu"
-        model = model.to(device)
+        # Load audio file into numpy array and resample to 16kHz
+        audio, sr = librosa.load(file_path, sr=16000)
         
-        transcriptions = {}
-        start_time = time.time()
-        for i, file_path in enumerate(file_paths):
-            print(f"Transcribing file {i+1}/{len(file_paths)}: {file_path}")
-            result = model.transcribe(str(file_path), 
-                                      language="en",
-                                      fp16=False,
-                                      beam_size=1)  # Reduced beam size for speed
-            transcriptions[os.path.splitext(os.path.basename(file_path))[0]] = result['text'].strip()
-            elapsed_time = time.time() - start_time
-            avg_time_per_file = elapsed_time / (i + 1)
-            remaining_time = avg_time_per_file * (len(file_paths) - (i + 1))
-            if progress_callback:
-                progress_callback(i + 1, len(file_paths), "Transcribing audio files...", remaining_time)
-        print("Completed transcriptions:", transcriptions)
-        return transcriptions
-    
-    finally:
-        # Restore the original urlopen function
-        urllib.request.urlopen = original_urlopen
+        # Process the audio with the feature extractor
+        inputs = processor(audio, sampling_rate=16000, return_tensors="pt").to(device, torch_dtype)
+        
+        # Transcribe using the model
+        with torch.no_grad():
+            generated_ids = model.generate(inputs["input_features"])
+            transcription = processor.batch_decode(generated_ids, skip_special_tokens=True)[0]
+        
+        transcriptions[os.path.splitext(os.path.basename(file_path))[0]] = transcription.strip()
+        
+        elapsed_time = time.time() - start_time
+        avg_time_per_file = elapsed_time / (i + 1)
+        remaining_time = avg_time_per_file * (len(file_paths) - (i + 1))
+        if progress_callback:
+            progress_callback(i + 1, len(file_paths), "Transcribing audio files...", remaining_time)
+    print("Completed transcriptions:", transcriptions)
+    return transcriptions
+
 
 def label_sentences(text1, text2):
     def normalize_text(text):
