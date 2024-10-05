@@ -40,7 +40,7 @@ import numpy as np
 
 def transcribe_audio_batch(file_paths, progress_callback=None):
     # Load the model and processor from Hugging Face
-    model_id = "shaunliu82714/whisper-small-en-genshin"
+    model_id = "shaunliu82714/whisper-genshin-en-2"
     device = "cuda" if torch.cuda.is_available() else "cpu"
     torch_dtype = torch.float16 if torch.cuda.is_available() else torch.float32
 
