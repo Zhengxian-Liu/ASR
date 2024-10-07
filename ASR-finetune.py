@@ -7,26 +7,24 @@ import time
 import warnings
 import re
 import string
+import logging
+import sys
+from openpyxl.styles import Font
 
 # Third-party imports
 import difflib
 import pandas as pd
 import tkinter as tk
+import openpyxl
 from tkinter import filedialog, messagebox, ttk
 from pathlib import Path
-import whisper
-from itertools import zip_longest
 from openpyxl import Workbook
-from transformers import AutoModelForSpeechSeq2Seq, AutoProcessor, pipeline
-import librosa
-import numpy as np
-
+from transformers import AutoModelForSpeechSeq2Seq, AutoProcessor
 # Suppress specific warnings
 warnings.filterwarnings("ignore", message="FP16 is not supported on CPU; using FP32 instead")
 
 import ssl
 import certifi
-import urllib.request
 
 def create_ssl_context():
     context = ssl.create_default_context(cafile=certifi.where())
@@ -34,41 +32,47 @@ def create_ssl_context():
     context.verify_mode = ssl.CERT_NONE
     return context
 
-import os
 import torch
 import librosa
-import numpy as np
-
-def transcribe_audio_batch(file_paths, progress_callback=None):
-    # Load the model and processor from Hugging Face
-    model_id = "shaunliu82714/whisper-genshin-en-2"
+    
+def transcribe_audio_batch(file_paths, model_path, progress_callback=None):
+    # Set the device and torch_dtype based on GPU availability
     device = "cuda" if torch.cuda.is_available() else "cpu"
     torch_dtype = torch.float16 if torch.cuda.is_available() else torch.float32
 
-    model = AutoModelForSpeechSeq2Seq.from_pretrained(
-        model_id, torch_dtype=torch_dtype, low_cpu_mem_usage=True
-    ).to(device)
+    # Load the model and processor
+    try:
+        model = AutoModelForSpeechSeq2Seq.from_pretrained(
+            model_path,
+            torch_dtype=torch_dtype,
+            low_cpu_mem_usage=True
+        ).to(device)
 
-    processor = AutoProcessor.from_pretrained(model_id)
+        processor = AutoProcessor.from_pretrained(model_path)
+        print("Model and processor loaded successfully.")
+    except Exception as e:
+        print(f"Error loading model: {e}")
+        messagebox.showerror("Error", f"Failed to load the model: {e}")
+        return None
 
     transcriptions = {}
     start_time = time.time()
     for i, file_path in enumerate(file_paths):
-        print(f"Transcribing file {i+1}/{len(file_paths)}: {file_path}")
-        
+        print(f"Transcribing file {i + 1}/{len(file_paths)}: {file_path}")
+
         # Load audio file into numpy array and resample to 16kHz
         audio, sr = librosa.load(file_path, sr=16000)
-        
+
         # Process the audio with the feature extractor
         inputs = processor(audio, sampling_rate=16000, return_tensors="pt").to(device, torch_dtype)
-        
+
         # Transcribe using the model
         with torch.no_grad():
             generated_ids = model.generate(inputs["input_features"])
             transcription = processor.batch_decode(generated_ids, skip_special_tokens=True)[0]
-        
+
         transcriptions[os.path.splitext(os.path.basename(file_path))[0]] = transcription.strip()
-        
+
         elapsed_time = time.time() - start_time
         avg_time_per_file = elapsed_time / (i + 1)
         remaining_time = avg_time_per_file * (len(file_paths) - (i + 1))
@@ -275,8 +279,13 @@ class TranscriptionApp:
 
     def run_transcribe_only(self):
         audio_files_directory = self.audio_dir_entry.get()
+        model_directory = self.model_dir_entry.get()
         if not audio_files_directory:
             messagebox.showerror("Error", "Please select an audio files directory.")
+            return
+        
+        if not model_directory:
+            messagebox.showerror("Error", "Please select a model directory.")
             return
         
         def task():
@@ -291,27 +300,48 @@ class TranscriptionApp:
         
         threading.Thread(target=task).start()
 
+    def close_comparison_dialog(self, dialog, confirmed):
+        """Close the dialog and set the confirmation result."""
+        self.confirmation_result = confirmed
+        dialog.destroy()
+        
     def create_setup_widgets(self):
-        ttk.Label(self.setup_frame, text="Audio Files Directory:").grid(row=0, column=0, sticky="w")
+     # Model directory selection
+        ttk.Label(self.setup_frame, text="Model Directory:").grid(row=0, column=0, sticky="w")
+        self.model_dir_entry = ttk.Entry(self.setup_frame, width=50)
+        self.model_dir_entry.grid(row=0, column=1, padx=5, pady=5)
+        ttk.Button(self.setup_frame, text="Browse", command=self.browse_model_dir).grid(row=0, column=2, padx=5)
+
+        # Audio files directory selection
+        ttk.Label(self.setup_frame, text="Audio Files Directory:").grid(row=1, column=0, sticky="w")
         self.audio_dir_entry = ttk.Entry(self.setup_frame, width=50)
-        self.audio_dir_entry.grid(row=0, column=1, padx=5, pady=5)
-        ttk.Button(self.setup_frame, text="Browse", command=self.browse_audio_dir).grid(row=0, column=2, padx=5)
+        self.audio_dir_entry.grid(row=1, column=1, padx=5, pady=5)
+        ttk.Button(self.setup_frame, text="Browse", command=self.browse_audio_dir).grid(row=1, column=2, padx=5)
 
-        ttk.Label(self.setup_frame, text="Script Excel File:").grid(row=1, column=0, sticky="w")
+        # Script Excel file selection
+        ttk.Label(self.setup_frame, text="Script Excel File:").grid(row=2, column=0, sticky="w")
         self.excel_file_entry = ttk.Entry(self.setup_frame, width=50)
-        self.excel_file_entry.grid(row=1, column=1, padx=5, pady=5)
-        ttk.Button(self.setup_frame, text="Browse", command=self.browse_excel_file).grid(row=1, column=2, padx=5)
+        self.excel_file_entry.grid(row=2, column=1, padx=5, pady=5)
+        ttk.Button(self.setup_frame, text="Browse", command=self.browse_excel_file).grid(row=2, column=2, padx=5)
 
-        ttk.Label(self.setup_frame, text="File Name Column:").grid(row=2, column=0, sticky="w")
+        # File Name Column ComboBox
+        ttk.Label(self.setup_frame, text="File Name Column:").grid(row=3, column=0, sticky="w")
         self.file_name_col_combo = ttk.Combobox(self.setup_frame, state="readonly", width=47)
-        self.file_name_col_combo.grid(row=2, column=1, padx=5, pady=5)
+        self.file_name_col_combo.grid(row=3, column=1, padx=5, pady=5)
 
-        ttk.Label(self.setup_frame, text="Script Text Column:").grid(row=3, column=0, sticky="w")
+        # Script Text Column ComboBox
+        ttk.Label(self.setup_frame, text="Script Text Column:").grid(row=4, column=0, sticky="w")
         self.script_text_col_combo = ttk.Combobox(self.setup_frame, state="readonly", width=47)
-        self.script_text_col_combo.grid(row=3, column=1, padx=5, pady=5)
+        self.script_text_col_combo.grid(row=4, column=1, padx=5, pady=5)
 
+        # Run Button
         self.run_button = ttk.Button(self.setup_frame, text="Run Comparison", command=self.run_tool)
-        self.run_button.grid(row=4, column=1, pady=10)
+        self.run_button.grid(row=5, column=1, pady=10)
+
+    def browse_model_dir(self):
+        model_directory = filedialog.askdirectory(title="Select Model Directory")
+        self.model_dir_entry.delete(0, tk.END)
+        self.model_dir_entry.insert(0, model_directory)
 
     def create_progress_widgets(self):
         self.progress_label = ttk.Label(self.progress_frame, text="")
@@ -413,6 +443,8 @@ class TranscriptionApp:
         return "black"
 
     def show_results(self, results, audio_files_directory):
+        self.modified_scripts = {}  # Dictionary to store modified scripts
+
         for widget in self.results_frame.frame.winfo_children():
             widget.destroy()
 
@@ -449,9 +481,8 @@ class TranscriptionApp:
             asr_label = tk.Label(comparison_frame, text="ASR Result")
             asr_label.grid(row=0, column=1, sticky="w")
 
-            script_text = tk.Text(comparison_frame, height=5, wrap='word', width=text_width, bg="white", fg="black")
+            script_text = tk.Text(comparison_frame, height=5, wrap='word', width=text_width, bg="white", fg="black", insertbackground="black")
             script_text.insert(tk.END, result['script'])
-            script_text.config(state=tk.DISABLED)
             script_text.grid(row=1, column=0, padx=(0, 5), pady=5, sticky="nsew")
 
             asr_text = tk.Text(comparison_frame, height=5, wrap='word', width=text_width, bg="white", fg="black")
@@ -467,9 +498,184 @@ class TranscriptionApp:
             asr_scrollbar.grid(row=1, column=1, sticky='nse')
             asr_text.config(yscrollcommand=asr_scrollbar.set)
 
+            # Enable editing by default and ensure cursor visibility
+            script_text.config(state=tk.NORMAL, insertbackground="black")
+
+            # Store the text widget and original script for later use
+            self.modified_scripts[file_name] = (script_text, result['script'])
+
+        # Add a global save button
+        global_save_button = tk.Button(self.results_frame.frame, text="Save All Changes", command=self.save_all_modified_scripts)
+        global_save_button.pack(pady=10)
+
         self.results_frame.frame.update_idletasks()
         self.results_frame.on_frame_configure(None)
         self.root.update()
+    
+    # Set up logging
+    logging.basicConfig(level=logging.DEBUG, filename='script_debug.log', filemode='w',
+                        format='%(asctime)s - %(levelname)s - %(message)s')
+    import openpyxl
+    def save_all_modified_scripts(self):
+        debug_info = []
+        
+        def add_debug(message):
+            print(message)
+            debug_info.append(message)
+
+        add_debug("Starting save_all_modified_scripts function")
+
+        # Create a new workbook for modified scripts
+        new_workbook = openpyxl.Workbook()
+        new_sheet = new_workbook.active
+        new_sheet.title = "Modified Scripts"
+
+        # Add headers
+        headers = ["VOID", "Original Line", "ASR Result", "Modified Line"]
+        for col, header in enumerate(headers, start=1):
+            new_sheet.cell(row=1, column=col, value=header)
+            new_sheet.cell(row=1, column=col).font = Font(bold=True)
+
+        row = 2  # Start from the second row (after headers)
+
+        # Collect and confirm modified scripts
+        modifications = {}
+        for file_name, (script_text_widget, original_script) in self.modified_scripts.items():
+            modified_script = script_text_widget.get("1.0", tk.END).strip()
+            if modified_script != original_script:
+                add_debug(f"Script modified for file: {file_name}")
+                add_debug(f"Original script: {original_script}")
+                add_debug(f"Modified script: {modified_script}")
+
+                # Store the modifications for later review
+                modifications[file_name] = {
+                    'original': original_script,
+                    'modified': modified_script,
+                    'asr': self.results[file_name]['transcription']
+                }
+
+        # Show all modifications for review
+        if modifications and self.show_all_comparisons(modifications):
+            for file_name, data in modifications.items():
+                # Add to the new sheet
+                new_sheet.cell(row=row, column=1, value=file_name)
+                new_sheet.cell(row=row, column=2, value=data['original'])
+                new_sheet.cell(row=row, column=3, value=data['asr'])
+                new_sheet.cell(row=row, column=4, value=data['modified'])
+                row += 1
+
+        total_modifications = row - 2
+        add_debug(f"Total modifications: {total_modifications}")
+
+        if total_modifications == 0:
+            messagebox.showinfo("No Changes", "No modifications were confirmed. No file will be saved.")
+            return
+
+        # Save the new workbook
+        save_path = filedialog.asksaveasfilename(
+            defaultextension=".xlsx",
+            filetypes=[("Excel files", "*.xlsx"), ("All files", "*.*")]
+        )
+
+        if save_path:
+            add_debug(f"Save path selected: {save_path}")
+            
+            try:
+                new_workbook.save(save_path)
+                add_debug("New workbook with modifications saved successfully")
+                
+                # Notify the user
+                messagebox.showinfo("Success", f"Modified scripts have been saved to a new file. Total modifications: {total_modifications}")
+            except Exception as e:
+                add_debug(f"Error saving workbook: {str(e)}")
+                messagebox.showerror("Error", f"Failed to save workbook: {str(e)}")
+        else:
+            add_debug("Save operation cancelled by user")
+            messagebox.showinfo("Cancelled", "Save operation was cancelled.")
+
+        add_debug("save_all_modified_scripts function completed")
+        
+        # Write debug info to a file
+        with open("debug_log.txt", "w") as f:
+            f.write("\n".join(debug_info))
+        
+        print("Debug information has been written to debug_log.txt")
+
+        return debug_info
+
+    def show_all_comparisons(self, modifications):
+        # Create a new window for comparison
+        comparison_window = tk.Toplevel(self.root)
+        comparison_window.title("Review All Modifications")
+
+        # Create a scrollable frame
+        canvas = tk.Canvas(comparison_window)
+        scrollbar = tk.Scrollbar(comparison_window, orient="vertical", command=canvas.yview)
+        scrollable_frame = tk.Frame(canvas)
+
+        scrollable_frame.bind(
+            "<Configure>",
+            lambda e: canvas.configure(
+                scrollregion=canvas.bbox("all")
+            )
+        )
+
+        canvas.create_window((0, 0), window=scrollable_frame, anchor="nw")
+        canvas.configure(yscrollcommand=scrollbar.set)
+
+        # Add headers
+        tk.Label(scrollable_frame, text="File Name", font=('Helvetica', 12, 'bold')).grid(row=0, column=0, padx=5, pady=5)
+        tk.Label(scrollable_frame, text="Original Script", font=('Helvetica', 12, 'bold')).grid(row=0, column=1, padx=5, pady=5)
+        tk.Label(scrollable_frame, text="Modified Script", font=('Helvetica', 12, 'bold')).grid(row=0, column=2, padx=5, pady=5)
+        tk.Label(scrollable_frame, text="ASR Result", font=('Helvetica', 12, 'bold')).grid(row=0, column=3, padx=5, pady=5)
+
+        # Function to highlight differences
+        def highlight_differences(text_widget, base_text, compare_text):
+            text_widget.config(state=tk.NORMAL)
+            text_widget.delete("1.0", tk.END)
+            matcher = difflib.SequenceMatcher(None, base_text.split(), compare_text.split())
+            for tag, i1, i2, j1, j2 in matcher.get_opcodes():
+                if tag == 'equal':
+                    text_widget.insert(tk.END, ' '.join(base_text.split()[i1:i2]) + ' ', 'normal')
+                else:
+                    text_widget.insert(tk.END, ' '.join(compare_text.split()[j1:j2]) + ' ', 'diff')
+            text_widget.config(state=tk.DISABLED)
+
+        # Populate the scrollable frame with modifications
+        for i, (file_name, data) in enumerate(modifications.items(), start=1):
+            original_script = data['original']
+            modified_script = data['modified']
+            asr_result = data['asr']
+
+            tk.Label(scrollable_frame, text=file_name).grid(row=i, column=0, padx=5, pady=5)
+
+            original_text = tk.Text(scrollable_frame, height=5, width=30, wrap='word', bg="lightgrey", fg="black")
+            original_text.insert(tk.END, original_script)
+            original_text.config(state=tk.DISABLED)
+            original_text.grid(row=i, column=1, padx=5, pady=5, sticky="nsew")
+
+            modified_text = tk.Text(scrollable_frame, height=5, width=30, wrap='word', bg="lightgrey", fg="black")
+            modified_text.tag_configure('diff', background='yellow', foreground='black')
+            modified_text.tag_configure('normal', background='white', foreground='black')
+            highlight_differences(modified_text, original_script, modified_script)
+            modified_text.grid(row=i, column=2, padx=5, pady=5, sticky="nsew")
+
+            asr_text = tk.Text(scrollable_frame, height=5, width=30, wrap='word', bg="lightgrey", fg="black")
+            asr_text.insert(tk.END, asr_result)
+            asr_text.config(state=tk.DISABLED)
+            asr_text.grid(row=i, column=3, padx=5, pady=5, sticky="nsew")
+
+        # Pack the canvas and scrollbar
+        canvas.pack(side="left", fill="both", expand=True)
+        scrollbar.pack(side="right", fill="y")
+
+        # Add a global confirm button
+        confirm_button = tk.Button(comparison_window, text="Confirm All", command=lambda: self.close_comparison_dialog(comparison_window, True))
+        confirm_button.pack(pady=10)
+
+        # Wait for user action
+        self.root.wait_window(comparison_window)
+        return self.confirmation_result
 
     def sort_results_by_similarity(self, results):
         sorted_results = sorted(
@@ -509,10 +715,11 @@ class TranscriptionApp:
 
     def run_tool(self):
         audio_files_directory = self.audio_dir_entry.get()
+        model_directory = self.model_dir_entry.get()
         excel_file_path = self.excel_file_entry.get()
         file_name_col = self.file_name_col_combo.get()
         script_text_col = self.script_text_col_combo.get()
-        if not all([audio_files_directory, excel_file_path, file_name_col, script_text_col]):
+        if not all([audio_files_directory, model_directory, excel_file_path, file_name_col, script_text_col]):
             messagebox.showerror("Error", "Please fill in all fields before running the comparison.")
             return
 
@@ -521,10 +728,14 @@ class TranscriptionApp:
 
         def task():
             try:
-                results = main(audio_files_directory, [excel_file_path], file_name_col, script_text_col, progress_callback=self.update_progress)
-                self.results = results
+                audio_files = list(Path(audio_files_directory).glob("*.wav"))
+                transcriptions = transcribe_audio_batch(audio_files, model_directory, progress_callback=self.update_progress)
+                scripts = read_scripts_from_excel_files([excel_file_path], file_name_col, script_text_col)
+                comparison_results = compare_batch(transcriptions, scripts, progress_callback=self.update_progress)
+                save_transcriptions_to_excel(transcriptions)
+                self.results = comparison_results
                 self.audio_files_directory = audio_files_directory
-                self.root.after(0, self.show_results, results, audio_files_directory)
+                self.root.after(0, self.show_results, comparison_results, audio_files_directory)
                 self.root.after(0, self.filter_frame.pack)  # Show the filter frame after results are displayed
             except Exception as e:
                 self.root.after(0, messagebox.showerror, "Error", str(e))
