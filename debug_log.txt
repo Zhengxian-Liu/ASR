@@ -1,8 +1,8 @@
 Starting save_all_modified_scripts function
-Script modified for file: vo_dialog_SGWLQ003_dupont_01
-Original script: Don't worry, I got this covered.
-Modified script: Don't worry, I got this covered.testing
+Script modified for file: vo_dialog_SGWLQ002_ceasth_01
+Original script: How could they switch without me noticing?
+Modified script: How could they switch without me noticing?testing
 Total modifications: 1
-Save path selected: /Users/zhengxian.liu/Work/ASR/modified16.xlsx
+Save path selected: /Users/zhengxian.liu/Work/ASR/modified18.xlsx
 New workbook with modifications saved successfully
 save_all_modified_scripts function completed

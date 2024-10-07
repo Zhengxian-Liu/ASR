@@ -525,7 +525,8 @@ class TranscriptionApp:
                     # Add to the new sheet
                     new_sheet.cell(row=row, column=1, value=file_name)
                     new_sheet.cell(row=row, column=2, value=original_script)
-                    new_sheet.cell(row=row, column=3, value=original_script)  # ASR result (same as original for now)
+                    # Correctly save the ASR result
+                    new_sheet.cell(row=row, column=3, value=self.results[file_name]['transcription'])  # ASR result
                     new_sheet.cell(row=row, column=4, value=modified_script)
                     row += 1
                 else:
