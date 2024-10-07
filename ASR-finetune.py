@@ -16,6 +16,10 @@ from tkinter import filedialog, messagebox, ttk
 from pathlib import Path
 import whisper
 from itertools import zip_longest
+from openpyxl import Workbook
+from transformers import AutoModelForSpeechSeq2Seq, AutoProcessor, pipeline
+import librosa
+import numpy as np
 
 # Suppress specific warnings
 warnings.filterwarnings("ignore", message="FP16 is not supported on CPU; using FP32 instead")
@@ -32,43 +36,71 @@ def create_ssl_context():
 
 import os
 import torch
+import librosa
+import numpy as np
 
 def transcribe_audio_batch(file_paths, progress_callback=None):
-    # Use the custom SSL context
-    ssl_context = create_ssl_context()
-    
-    # Patch urllib to use our custom SSL context
-    original_urlopen = urllib.request.urlopen
-    urllib.request.urlopen = lambda *args, **kwargs: original_urlopen(*args, **kwargs, context=ssl_context)
-    
-    try:
-        # Use a smaller model for faster processing
-        model = whisper.load_model("base", download_root="./models")
+    # Load the model and processor from Hugging Face
+    model_id = "shaunliu82714/whisper-genshin-en-2"
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+    torch_dtype = torch.float16 if torch.cuda.is_available() else torch.float32
+
+    model = AutoModelForSpeechSeq2Seq.from_pretrained(
+        model_id, torch_dtype=torch_dtype, low_cpu_mem_usage=True
+    ).to(device)
+
+    processor = AutoProcessor.from_pretrained(model_id)
+
+    transcriptions = {}
+    start_time = time.time()
+    for i, file_path in enumerate(file_paths):
+        print(f"Transcribing file {i+1}/{len(file_paths)}: {file_path}")
         
-        # Enable GPU acceleration if available
-        device = "cuda" if torch.cuda.is_available() else "cpu"
-        model = model.to(device)
+        # Load audio file into numpy array and resample to 16kHz
+        audio, sr = librosa.load(file_path, sr=16000)
         
-        transcriptions = {}
-        start_time = time.time()
-        for i, file_path in enumerate(file_paths):
-            print(f"Transcribing file {i+1}/{len(file_paths)}: {file_path}")
-            result = model.transcribe(str(file_path), 
-                                      language="en",
-                                      fp16=False,
-                                      beam_size=1)  # Reduced beam size for speed
-            transcriptions[os.path.splitext(os.path.basename(file_path))[0]] = result['text'].strip()
-            elapsed_time = time.time() - start_time
-            avg_time_per_file = elapsed_time / (i + 1)
-            remaining_time = avg_time_per_file * (len(file_paths) - (i + 1))
-            if progress_callback:
-                progress_callback(i + 1, len(file_paths), "Transcribing audio files...", remaining_time)
-        print("Completed transcriptions:", transcriptions)
-        return transcriptions
+        # Process the audio with the feature extractor
+        inputs = processor(audio, sampling_rate=16000, return_tensors="pt").to(device, torch_dtype)
+        
+        # Transcribe using the model
+        with torch.no_grad():
+            generated_ids = model.generate(inputs["input_features"])
+            transcription = processor.batch_decode(generated_ids, skip_special_tokens=True)[0]
+        
+        transcriptions[os.path.splitext(os.path.basename(file_path))[0]] = transcription.strip()
+        
+        elapsed_time = time.time() - start_time
+        avg_time_per_file = elapsed_time / (i + 1)
+        remaining_time = avg_time_per_file * (len(file_paths) - (i + 1))
+        if progress_callback:
+            progress_callback(i + 1, len(file_paths), "Transcribing audio files...", remaining_time)
+    print("Completed transcriptions:", transcriptions)
+    return transcriptions
+
+def save_transcriptions_to_excel(transcriptions, output_file='transcriptions.xlsx'):
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "Transcriptions"
     
-    finally:
-        # Restore the original urlopen function
-        urllib.request.urlopen = original_urlopen
+    # Add headers
+    ws['A1'] = "VOID (File Name)"
+    ws['B1'] = "Transcribed Content"
+    
+    # Add data
+    for row, (file_name, content) in enumerate(transcriptions.items(), start=2):
+        ws.cell(row=row, column=1, value=file_name)
+        ws.cell(row=row, column=2, value=content)
+    
+    # Adjust column widths
+    ws.column_dimensions['A'].width = 20
+    ws.column_dimensions['B'].width = 100
+    
+    # Save the workbook
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    output_path = os.path.join(script_dir, output_file)
+    wb.save(output_path)
+    print(f"Transcriptions saved to {output_path}")
+    return output_path
 
 def label_sentences(text1, text2):
     def normalize_text(text):
@@ -157,6 +189,8 @@ def main(audio_files_directory, excel_files, file_name_col, script_text_col, pro
     
     comparison_results = compare_batch(transcriptions, scripts, progress_callback=progress_callback)
     
+    save_transcriptions_to_excel(transcriptions)
+
     return comparison_results
 
 def play_audio(file_path):
@@ -232,9 +266,30 @@ class TranscriptionApp:
         self.show_word_diff = tk.BooleanVar(value=True)
         self.show_no_diff = tk.BooleanVar(value=True)
         
+        self.transcribe_only_button = ttk.Button(self.setup_frame, text="Transcribe Only", command=self.run_transcribe_only)
+        self.transcribe_only_button.grid(row=4, column=2, pady=10)
+
         self.create_setup_widgets()
         self.create_progress_widgets()
         self.create_filter_widgets()
+
+    def run_transcribe_only(self):
+        audio_files_directory = self.audio_dir_entry.get()
+        if not audio_files_directory:
+            messagebox.showerror("Error", "Please select an audio files directory.")
+            return
+        
+        def task():
+            try:
+                audio_files = list(Path(audio_files_directory).glob("*.wav"))
+                transcriptions = transcribe_audio_batch(audio_files, progress_callback=self.update_progress)
+                save_transcriptions_to_excel(transcriptions)
+                self.root.after(0, messagebox.showinfo, "Success", "Transcriptions saved to transcriptions.xlsx")
+            except Exception as e:
+                self.root.after(0, messagebox.showerror, "Error", str(e))
+                print(f"Error details: {e}")  
+        
+        threading.Thread(target=task).start()
 
     def create_setup_widgets(self):
         ttk.Label(self.setup_frame, text="Audio Files Directory:").grid(row=0, column=0, sticky="w")
