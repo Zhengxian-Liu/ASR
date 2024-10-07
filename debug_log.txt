@@ -1,8 +1,15 @@
 Starting save_all_modified_scripts function
+Script modified for file: vo_dialog_SGWLQ003_dupont_01
+Original script: Don't worry, I got this covered.
+Modified script: Don't worry, I got this covered.testing
 Script modified for file: vo_dialog_SGWLQ002_ceasth_01
 Original script: How could they switch without me noticing?
 Modified script: How could they switch without me noticing?testing
+Modification canceled for file: vo_dialog_SGWLQ002_ceasth_01
+Script modified for file: vo_dialog_SGWLQ001_aurillac_01
+Original script: I'm buying for a friend, but just wanna check — this is designed for both women and men, right?
+Modified script: I'm buying for a friend, but just wanna check — this is designed for both women and men, right?testing
+Modification canceled for file: vo_dialog_SGWLQ001_aurillac_01
 Total modifications: 1
-Save path selected: /Users/zhengxian.liu/Work/ASR/modified18.xlsx
-New workbook with modifications saved successfully
+Save operation cancelled by user
 save_all_modified_scripts function completed

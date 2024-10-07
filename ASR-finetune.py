@@ -521,7 +521,7 @@ class TranscriptionApp:
                 add_debug(f"Modified script: {modified_script}")
 
                 # Show confirmation dialog
-                if self.show_comparison_dialog(original_script, modified_script):
+                if self.show_comparison_dialog(original_script, modified_script, self.results[file_name]['transcription']):
                     # Add to the new sheet
                     new_sheet.cell(row=row, column=1, value=file_name)
                     new_sheet.cell(row=row, column=2, value=original_script)
@@ -572,29 +572,72 @@ class TranscriptionApp:
         return debug_info
 
 
-    def show_comparison_dialog(self, original_script, modified_script):
+    def show_comparison_dialog(self, original_script, modified_script, asr_result):
         # Create a new window for comparison
         comparison_window = tk.Toplevel(self.root)
         comparison_window.title("Confirm Changes")
 
-        tk.Label(comparison_window, text="Original Script:").pack(anchor="w")
-        original_text = tk.Text(comparison_window, height=5, wrap='word', bg="lightgrey")
-        original_text.insert(tk.END, original_script)
-        original_text.config(state=tk.DISABLED)
-        original_text.pack(fill="x", padx=5, pady=5)
+        # Configure text tags for highlighting differences
+        def configure_text_widget(text_widget):
+            text_widget.tag_configure('diff', background='yellow', foreground='black')
+            text_widget.tag_configure('normal', background='white', foreground='black')
+            text_widget.config(state=tk.DISABLED)
 
-        tk.Label(comparison_window, text="Modified Script:").pack(anchor="w")
-        modified_text = tk.Text(comparison_window, height=5, wrap='word', bg="lightgrey")
-        modified_text.insert(tk.END, modified_script)
-        modified_text.config(state=tk.DISABLED)
-        modified_text.pack(fill="x", padx=5, pady=5)
+        def highlight_differences(text_widget, base_text, compare_text):
+            text_widget.config(state=tk.NORMAL)
+            text_widget.delete("1.0", tk.END)
+            matcher = difflib.SequenceMatcher(None, base_text.split(), compare_text.split())
+            for tag, i1, i2, j1, j2 in matcher.get_opcodes():
+                if tag == 'equal':
+                    text_widget.insert(tk.END, ' '.join(base_text.split()[i1:i2]) + ' ', 'normal')
+                else:
+                    text_widget.insert(tk.END, ' '.join(compare_text.split()[j1:j2]) + ' ', 'diff')
+            text_widget.config(state=tk.DISABLED)
+
+        # Create text widgets for each script
+        original_text = tk.Text(comparison_window, height=10, wrap='word', bg="lightgrey", fg="black")
+        modified_text = tk.Text(comparison_window, height=10, wrap='word', bg="lightgrey", fg="black")
+        asr_text = tk.Text(comparison_window, height=10, wrap='word', bg="lightgrey", fg="black")
+
+        # Configure text widgets
+        configure_text_widget(original_text)
+        configure_text_widget(modified_text)
+        asr_text.config(state=tk.NORMAL)  # Ensure ASR text widget is editable for insertion
+
+        # Insert text into widgets
+        original_text.config(state=tk.NORMAL)  # Ensure original text widget is editable for insertion
+        original_text.insert(tk.END, original_script)
+        original_text.config(state=tk.DISABLED)  # Disable editing after insertion
+
+        highlight_differences(modified_text, original_script, modified_script)
+
+        asr_text.insert(tk.END, asr_result)
+        asr_text.config(state=tk.DISABLED)  # Disable editing after insertion
+
+        # Arrange text widgets in a grid
+        tk.Label(comparison_window, text="Original Script").grid(row=0, column=0, padx=5, pady=5)
+        tk.Label(comparison_window, text="Modified Script").grid(row=0, column=1, padx=5, pady=5)
+        tk.Label(comparison_window, text="ASR Result (Reference)").grid(row=0, column=2, padx=5, pady=5)
+
+        original_text.grid(row=1, column=0, padx=5, pady=5, sticky="nsew")
+        modified_text.grid(row=1, column=1, padx=5, pady=5, sticky="nsew")
+        asr_text.grid(row=1, column=2, padx=5, pady=5, sticky="nsew")
+
+        # Configure grid weights for resizing
+        comparison_window.grid_columnconfigure(0, weight=1)
+        comparison_window.grid_columnconfigure(1, weight=1)
+        comparison_window.grid_columnconfigure(2, weight=1)
+        comparison_window.grid_rowconfigure(1, weight=1)
 
         # Add confirm and cancel buttons
-        confirm_button = tk.Button(comparison_window, text="Confirm", command=lambda: self.close_comparison_dialog(comparison_window, True))
-        confirm_button.pack(side="left", padx=5, pady=5)
+        button_frame = tk.Frame(comparison_window)
+        button_frame.grid(row=2, column=0, columnspan=3, pady=10)
 
-        cancel_button = tk.Button(comparison_window, text="Cancel", command=lambda: self.close_comparison_dialog(comparison_window, False))
-        cancel_button.pack(side="right", padx=5, pady=5)
+        confirm_button = tk.Button(button_frame, text="Confirm", command=lambda: self.close_comparison_dialog(comparison_window, True))
+        confirm_button.pack(side="left", padx=5)
+
+        cancel_button = tk.Button(button_frame, text="Cancel", command=lambda: self.close_comparison_dialog(comparison_window, False))
+        cancel_button.pack(side="right", padx=5)
 
         # Wait for user action
         self.root.wait_window(comparison_window)
