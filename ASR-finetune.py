@@ -1,5 +1,6 @@
 # Standard library imports
 import os
+import sys
 import platform
 import subprocess
 import threading
@@ -7,16 +8,19 @@ import time
 import warnings
 import re
 import string
+import logging
+from openpyxl.styles import Font
 
 # Third-party imports
 import difflib
 import pandas as pd
 import tkinter as tk
+import openpyxl
 from tkinter import filedialog, messagebox, ttk
 from pathlib import Path
 import whisper
 from itertools import zip_longest
-from openpyxl import Workbook
+from openpyxl import Workbook, load_workbook
 from transformers import AutoModelForSpeechSeq2Seq, AutoProcessor, pipeline
 import librosa
 import numpy as np
@@ -413,6 +417,8 @@ class TranscriptionApp:
         return "black"
 
     def show_results(self, results, audio_files_directory):
+        self.modified_scripts = {}  # Dictionary to store modified scripts
+
         for widget in self.results_frame.frame.winfo_children():
             widget.destroy()
 
@@ -449,9 +455,8 @@ class TranscriptionApp:
             asr_label = tk.Label(comparison_frame, text="ASR Result")
             asr_label.grid(row=0, column=1, sticky="w")
 
-            script_text = tk.Text(comparison_frame, height=5, wrap='word', width=text_width, bg="white", fg="black")
+            script_text = tk.Text(comparison_frame, height=5, wrap='word', width=text_width, bg="white", fg="black", insertbackground="black")
             script_text.insert(tk.END, result['script'])
-            script_text.config(state=tk.DISABLED)
             script_text.grid(row=1, column=0, padx=(0, 5), pady=5, sticky="nsew")
 
             asr_text = tk.Text(comparison_frame, height=5, wrap='word', width=text_width, bg="white", fg="black")
@@ -467,10 +472,137 @@ class TranscriptionApp:
             asr_scrollbar.grid(row=1, column=1, sticky='nse')
             asr_text.config(yscrollcommand=asr_scrollbar.set)
 
+            # Enable editing by default and ensure cursor visibility
+            script_text.config(state=tk.NORMAL, insertbackground="black")
+
+            # Store the text widget and original script for later use
+            self.modified_scripts[file_name] = (script_text, result['script'])
+
+        # Add a global save button
+        global_save_button = tk.Button(self.results_frame.frame, text="Save All Changes", command=self.save_all_modified_scripts)
+        global_save_button.pack(pady=10)
+
         self.results_frame.frame.update_idletasks()
         self.results_frame.on_frame_configure(None)
         self.root.update()
+    
+    # Set up logging
+    logging.basicConfig(level=logging.DEBUG, filename='script_debug.log', filemode='w',
+                        format='%(asctime)s - %(levelname)s - %(message)s')
+    import openpyxl
+    def save_all_modified_scripts(self):
+        debug_info = []
+        
+        def add_debug(message):
+            print(message)
+            debug_info.append(message)
 
+        add_debug("Starting save_all_modified_scripts function")
+
+        # Create a new workbook for modified scripts
+        new_workbook = openpyxl.Workbook()
+        new_sheet = new_workbook.active
+        new_sheet.title = "Modified Scripts"
+
+        # Add headers
+        headers = ["VOID", "Original Line", "ASR Result", "Modified Line"]
+        for col, header in enumerate(headers, start=1):
+            new_sheet.cell(row=1, column=col, value=header)
+            new_sheet.cell(row=1, column=col).font = Font(bold=True)
+
+        row = 2  # Start from the second row (after headers)
+
+        # Collect and confirm modified scripts
+        for file_name, (script_text_widget, original_script) in self.modified_scripts.items():
+            modified_script = script_text_widget.get("1.0", tk.END).strip()
+            if modified_script != original_script:
+                add_debug(f"Script modified for file: {file_name}")
+                add_debug(f"Original script: {original_script}")
+                add_debug(f"Modified script: {modified_script}")
+
+                # Show confirmation dialog
+                if self.show_comparison_dialog(original_script, modified_script):
+                    # Add to the new sheet
+                    new_sheet.cell(row=row, column=1, value=file_name)
+                    new_sheet.cell(row=row, column=2, value=original_script)
+                    new_sheet.cell(row=row, column=3, value=original_script)  # ASR result (same as original for now)
+                    new_sheet.cell(row=row, column=4, value=modified_script)
+                    row += 1
+                else:
+                    add_debug(f"Modification canceled for file: {file_name}")
+
+        total_modifications = row - 2
+        add_debug(f"Total modifications: {total_modifications}")
+
+        if total_modifications == 0:
+            messagebox.showinfo("No Changes", "No modifications were confirmed. No file will be saved.")
+            return
+
+        # Save the new workbook
+        save_path = filedialog.asksaveasfilename(
+            defaultextension=".xlsx",
+            filetypes=[("Excel files", "*.xlsx"), ("All files", "*.*")]
+        )
+
+        if save_path:
+            add_debug(f"Save path selected: {save_path}")
+            
+            try:
+                new_workbook.save(save_path)
+                add_debug("New workbook with modifications saved successfully")
+                
+                # Notify the user
+                messagebox.showinfo("Success", f"Modified scripts have been saved to a new file. Total modifications: {total_modifications}")
+            except Exception as e:
+                add_debug(f"Error saving workbook: {str(e)}")
+                messagebox.showerror("Error", f"Failed to save workbook: {str(e)}")
+        else:
+            add_debug("Save operation cancelled by user")
+            messagebox.showinfo("Cancelled", "Save operation was cancelled.")
+
+        add_debug("save_all_modified_scripts function completed")
+        
+        # Write debug info to a file
+        with open("debug_log.txt", "w") as f:
+            f.write("\n".join(debug_info))
+        
+        print("Debug information has been written to debug_log.txt")
+
+        return debug_info
+
+
+    def show_comparison_dialog(self, original_script, modified_script):
+        # Create a new window for comparison
+        comparison_window = tk.Toplevel(self.root)
+        comparison_window.title("Confirm Changes")
+
+        tk.Label(comparison_window, text="Original Script:").pack(anchor="w")
+        original_text = tk.Text(comparison_window, height=5, wrap='word', bg="lightgrey")
+        original_text.insert(tk.END, original_script)
+        original_text.config(state=tk.DISABLED)
+        original_text.pack(fill="x", padx=5, pady=5)
+
+        tk.Label(comparison_window, text="Modified Script:").pack(anchor="w")
+        modified_text = tk.Text(comparison_window, height=5, wrap='word', bg="lightgrey")
+        modified_text.insert(tk.END, modified_script)
+        modified_text.config(state=tk.DISABLED)
+        modified_text.pack(fill="x", padx=5, pady=5)
+
+        # Add confirm and cancel buttons
+        confirm_button = tk.Button(comparison_window, text="Confirm", command=lambda: self.close_comparison_dialog(comparison_window, True))
+        confirm_button.pack(side="left", padx=5, pady=5)
+
+        cancel_button = tk.Button(comparison_window, text="Cancel", command=lambda: self.close_comparison_dialog(comparison_window, False))
+        cancel_button.pack(side="right", padx=5, pady=5)
+
+        # Wait for user action
+        self.root.wait_window(comparison_window)
+        return self.confirmation_result
+
+    def close_comparison_dialog(self, window, result):
+        self.confirmation_result = result
+        window.destroy()
+        
     def sort_results_by_similarity(self, results):
         sorted_results = sorted(
             results.items(),
