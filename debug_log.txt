@@ -1,0 +1,14 @@
+Starting save_all_modified_scripts function
+Script modified for file: vo_dialog_SGWLQ003_dupont_01
+Original script: Don't worry, I got this covered.
+Modified script: Don't worry, I got this covered.testing
+Script modified for file: vo_dialog_SGWLQ002_ceasth_01
+Original script: How could they switch without me noticing?
+Modified script: How could they switch without me noticing?testing
+Script modified for file: vo_dialog_SGWLQ001_istress_01
+Original script: I was looking to switch up my skincare routine anyway. I'm gonna try this out as soon as I get home tonight.
+Modified script: I was looking to switch up my skincare routine anyway. I'm gonna try this out as soon as I get home tonight.testing
+Total modifications: 3
+Save path selected: /Users/zhengxian.liu/Work/ASR/modified 20.xlsx
+New workbook with modifications saved successfully
+save_all_modified_scripts function completed
