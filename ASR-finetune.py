@@ -10,7 +10,7 @@ import re
 import string
 import logging
 from openpyxl.styles import Font
-
+import queue
 # Third-party imports
 import difflib
 import pandas as pd
@@ -43,7 +43,7 @@ import torch
 import librosa
 import numpy as np
 
-def transcribe_audio_batch(file_paths, progress_callback=None):
+def transcribe_audio_batch(file_paths, progress_queue=None):
     # Load the model and processor from Hugging Face
     model_id = "shaunliu82714/whisper-finetuned-vocab-trained"
     device = "cuda" if torch.cuda.is_available() else "cpu"
@@ -57,9 +57,11 @@ def transcribe_audio_batch(file_paths, progress_callback=None):
 
     transcriptions = {}
     start_time = time.time()
+    total_files = len(file_paths)
+
     for i, file_path in enumerate(file_paths):
-        print(f"Transcribing file {i+1}/{len(file_paths)}: {file_path}")
-        
+        print(f"Transcribing file {i+1}/{total_files}: {file_path}")
+
         # Load audio file into numpy array and resample to 16kHz
         audio, sr = librosa.load(file_path, sr=16000)
         
@@ -75,9 +77,10 @@ def transcribe_audio_batch(file_paths, progress_callback=None):
         
         elapsed_time = time.time() - start_time
         avg_time_per_file = elapsed_time / (i + 1)
-        remaining_time = avg_time_per_file * (len(file_paths) - (i + 1))
-        if progress_callback:
-            progress_callback(i + 1, len(file_paths), "Transcribing audio files...", remaining_time)
+        remaining_time = avg_time_per_file * (total_files - (i + 1))
+        
+        if progress_queue:
+            progress_queue.put((i + 1, total_files, "Transcribing audio files...", remaining_time))
     print("Completed transcriptions:", transcriptions)
     return transcriptions
 
@@ -147,9 +150,12 @@ def compare_texts(transcribed_text, script_text):
     diff_text = ' '.join(diff_text).replace('^', '')
     return similarity_percentage, diff_text
 
-def compare_batch(transcriptions, scripts, progress_callback=None):
+def compare_batch(transcriptions, scripts, progress_queue=None):
     comparison_results = {}
     start_time = time.time()
+    total_files = len(transcriptions)
+    remaining_time = 0  # Initialize remaining_time
+
     for i, (file_name, transcribed_text) in enumerate(transcriptions.items()):
         print(f"Comparing transcription for file: {file_name}")
         script_text = scripts.get(file_name, "")
@@ -165,9 +171,10 @@ def compare_batch(transcriptions, scripts, progress_callback=None):
         }
         elapsed_time = time.time() - start_time
         avg_time_per_file = elapsed_time / (i + 1)
-        remaining_time = avg_time_per_file * (len(transcriptions) - (i + 1))
-        if progress_callback:
-            progress_callback(i + 1, len(transcriptions), "Comparing transcriptions with scripts...", remaining_time)
+        remaining_time = avg_time_per_file * (total_files - (i + 1))
+        
+        if progress_queue:
+            progress_queue.put((i + 1, total_files, "Comparing transcriptions with scripts...", remaining_time))
     print("Completed comparisons:", comparison_results)
     return comparison_results
 
@@ -269,10 +276,12 @@ class TranscriptionApp:
         self.show_punct_diff = tk.BooleanVar(value=True)
         self.show_word_diff = tk.BooleanVar(value=True)
         self.show_no_diff = tk.BooleanVar(value=True)
-        
+        self.items_per_page = 10  # Number of results to display per page
+        self.current_page = 0
+        self.total_pages = 0
         self.transcribe_only_button = ttk.Button(self.setup_frame, text="Transcribe Only", command=self.run_transcribe_only)
         self.transcribe_only_button.grid(row=4, column=2, pady=10)
-        
+
         self.create_setup_widgets()
         self.create_progress_widgets()
         self.create_filter_widgets()
@@ -349,10 +358,13 @@ class TranscriptionApp:
         self.filter_frame.pack_forget()  # Hide initially
 
     def apply_filters_and_sort(self):
-        if self.results and self.audio_files_directory:
-            filtered_results = self.filter_results(self.results)
+        if self.all_results and self.audio_files_directory:
+            filtered_results = self.filter_results(self.all_results)
             sorted_results = self.sort_results_by_similarity(filtered_results)
-            self.show_results(sorted_results, self.audio_files_directory)
+            self.all_results = sorted_results
+            self.total_pages = (len(sorted_results) - 1) // self.items_per_page + 1
+            self.current_page = 0
+            self.display_current_page()
 
     def filter_results(self, results):
         filtered = {}
@@ -422,14 +434,22 @@ class TranscriptionApp:
         return "black"
 
     def show_results(self, results, audio_files_directory):
-        self.modified_scripts = {}  # Dictionary to store modified scripts
+        self.modified_scripts = {}
+        self.all_results = results  # Store all results
+        self.audio_files_directory = audio_files_directory  # Store audio files directory
+        self.total_pages = (len(results) - 1) // self.items_per_page + 1
+        self.current_page = 0
+        self.display_current_page()
 
+    def display_current_page(self):
         for widget in self.results_frame.frame.winfo_children():
             widget.destroy()
-
         text_width = 50
+        start_index = self.current_page * self.items_per_page
+        end_index = start_index + self.items_per_page
+        current_results = dict(list(self.all_results.items())[start_index:end_index])
 
-        for file_name, result in results.items():
+        for file_name, result in current_results.items():
             file_frame = tk.Frame(self.results_frame.frame)
             file_frame.pack(fill="x", expand=True, pady=10)
             
@@ -446,7 +466,7 @@ class TranscriptionApp:
             diff_label = tk.Label(header_frame, text=diff_text, fg=diff_color)
             diff_label.pack(side="left", padx=5)
             
-            tk.Button(header_frame, text="Play Audio", command=lambda fn=file_name: play_audio(os.path.join(audio_files_directory, fn + '.wav'))).pack(side="right")
+            tk.Button(header_frame, text="Play Audio", command=lambda fn=file_name: play_audio(os.path.join(self.audio_files_directory, fn + '.wav'))).pack(side="right")
 
             comparison_frame = tk.Frame(file_frame)
             comparison_frame.pack(fill="x", expand=True)
@@ -482,6 +502,22 @@ class TranscriptionApp:
 
             # Store the text widget and original script for later use
             self.modified_scripts[file_name] = (script_text, result['script'])
+        # Add pagination controls
+        pagination_frame = tk.Frame(self.results_frame.frame)
+        pagination_frame.pack(fill="x", expand=True, pady=10)
+
+        prev_button = tk.Button(pagination_frame, text="Previous", command=self.prev_page)
+        prev_button.pack(side="left")
+
+        next_button = tk.Button(pagination_frame, text="Next", command=self.next_page)
+        next_button.pack(side="right")
+
+        page_label = tk.Label(pagination_frame, text=f"Page {self.current_page + 1} of {self.total_pages}")
+        page_label.pack()
+
+        self.results_frame.frame.update_idletasks()
+        self.results_frame.on_frame_configure(None)
+        self.root.update()
 
         # Add a global save button
         global_save_button = tk.Button(self.results_frame.frame, text="Save All Changes", command=self.save_all_modified_scripts)
@@ -490,7 +526,15 @@ class TranscriptionApp:
         self.results_frame.frame.update_idletasks()
         self.results_frame.on_frame_configure(None)
         self.root.update()
-    
+    def prev_page(self):
+        if self.current_page > 0:
+            self.current_page -= 1
+            self.display_current_page()
+
+    def next_page(self):
+        if self.current_page < self.total_pages - 1:
+            self.current_page += 1
+            self.display_current_page()
     # Set up logging
     logging.basicConfig(level=logging.DEBUG, filename='script_debug.log', filemode='w',
                         format='%(asctime)s - %(levelname)s - %(message)s')
@@ -503,7 +547,7 @@ class TranscriptionApp:
             debug_info.append(message)
 
         add_debug("Starting save_all_modified_scripts function")
-
+    
         # Create a new workbook for modified scripts
         new_workbook = openpyxl.Workbook()
         new_sheet = new_workbook.active
@@ -530,7 +574,7 @@ class TranscriptionApp:
                 modifications[file_name] = {
                     'original': original_script,
                     'modified': modified_script,
-                    'asr': self.results[file_name]['transcription']
+                    'asr': self.all_results[file_name]['transcription']
                 }
 
         # Show all modifications for review
@@ -704,17 +748,39 @@ class TranscriptionApp:
         self.progress["value"] = 0
         self.progress_label.config(text="")
 
+        progress_queue = queue.Queue()
+
         def task():
             try:
-                results = main(audio_files_directory, [excel_file_path], file_name_col, script_text_col, progress_callback=self.update_progress)
-                self.results = results
+                # Transcription phase
+                audio_files = list(Path(audio_files_directory).glob("*.wav"))
+                transcriptions = transcribe_audio_batch(audio_files, progress_queue)
+
+                # Read scripts
+                scripts = read_scripts_from_excel_files([excel_file_path], file_name_col, script_text_col)
+
+                # Comparison phase
+                results = compare_batch(transcriptions, scripts, progress_queue)
+
+                self.all_results = results
                 self.audio_files_directory = audio_files_directory
                 self.root.after(0, self.show_results, results, audio_files_directory)
-                self.root.after(0, self.filter_frame.pack)  # Show the filter frame after results are displayed
+                self.root.after(0, self.filter_frame.pack)
             except Exception as e:
                 self.root.after(0, messagebox.showerror, "Error", str(e))
 
-        threading.Thread(target=task).start()
+        def update_gui():
+            try:
+                while True:
+                    current, total, status, remaining_time = progress_queue.get_nowait()
+                    self.update_progress(current, total, status, remaining_time)
+            except queue.Empty:
+                pass
+            finally:
+                self.root.after(100, update_gui)
+
+        threading.Thread(target=task, daemon=True).start()
+        self.root.after(100, update_gui)
 
 if __name__ == "__main__":
     root = tk.Tk()
