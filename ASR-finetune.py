@@ -272,7 +272,7 @@ class TranscriptionApp:
         
         self.transcribe_only_button = ttk.Button(self.setup_frame, text="Transcribe Only", command=self.run_transcribe_only)
         self.transcribe_only_button.grid(row=4, column=2, pady=10)
-
+        
         self.create_setup_widgets()
         self.create_progress_widgets()
         self.create_filter_widgets()
