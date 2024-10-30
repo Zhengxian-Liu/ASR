@@ -250,9 +250,12 @@ class ScrollableFrame(tk.Frame):
 class TranscriptionApp:
     def __init__(self, root):
         self.root = root
-        self.root.title("Transcription Comparison Tool")
-        self.root.geometry("1200x800")
-
+        self.root.title("ASR Transcription Comparison Tool")
+        self.confirmation_result = False
+        self.modified_scripts = {}
+        self.items_per_page = 10
+        self.current_page = 0
+        self.total_pages = 0
         self.style = ttk.Style()
         self.style.theme_use('clam')
         self.style.configure('TButton', padding=6, relief="flat", background="#4CAF50", foreground="white")
@@ -276,15 +279,14 @@ class TranscriptionApp:
         self.show_punct_diff = tk.BooleanVar(value=True)
         self.show_word_diff = tk.BooleanVar(value=True)
         self.show_no_diff = tk.BooleanVar(value=True)
-        self.items_per_page = 10  # Number of results to display per page
-        self.current_page = 0
-        self.total_pages = 0
         self.transcribe_only_button = ttk.Button(self.setup_frame, text="Transcribe Only", command=self.run_transcribe_only)
         self.transcribe_only_button.grid(row=4, column=2, pady=10)
 
         self.create_setup_widgets()
         self.create_progress_widgets()
         self.create_filter_widgets()
+
+        self.text_modifications = {}  # New dictionary to store just the text modifications
 
     def run_transcribe_only(self):
         audio_files_directory = self.audio_dir_entry.get()
@@ -304,10 +306,9 @@ class TranscriptionApp:
         
         threading.Thread(target=task).start()
 
-    def close_comparison_dialog(self, dialog, confirmed):
-        """Close the dialog and set the confirmation result."""
-        self.confirmation_result = confirmed
-        dialog.destroy()
+    def close_comparison_dialog(self, window, result):
+        self.confirmation_result = result
+        window.destroy()
         
     def create_setup_widgets(self):
         ttk.Label(self.setup_frame, text="Audio Files Directory:").grid(row=0, column=0, sticky="w")
@@ -354,6 +355,10 @@ class TranscriptionApp:
         
         self.apply_button = ttk.Button(self.filter_frame, text="Apply Filters", command=self.apply_filters_and_sort)
         self.apply_button.pack(side="left", padx=10)
+        
+        # Add Save All Changes button
+        self.save_button = ttk.Button(self.filter_frame, text="Save All Changes", command=self.save_all_modified_scripts)
+        self.save_button.pack(side="left", padx=10)
         
         self.filter_frame.pack_forget()  # Hide initially
 
@@ -435,25 +440,67 @@ class TranscriptionApp:
 
     def show_results(self, results, audio_files_directory):
         self.modified_scripts = {}
-        self.all_results = results  # Store all results
-        self.audio_files_directory = audio_files_directory  # Store audio files directory
+        self.all_results = results
+        self.audio_files_directory = audio_files_directory
+        
+        # Calculate total pages
         self.total_pages = (len(results) - 1) // self.items_per_page + 1
         self.current_page = 0
+        
+        # Reset pagination frame
+        if hasattr(self, 'pagination_frame'):
+            self.pagination_frame.destroy()
+            delattr(self, 'pagination_frame')
+        
         self.display_current_page()
 
     def display_current_page(self):
+        text_width = 50
+
+        # Clear existing content
         for widget in self.results_frame.frame.winfo_children():
             widget.destroy()
-        text_width = 50
+
+        # Create pagination frame at the top
+        self.pagination_frame = ttk.Frame(self.results_frame.frame)
+        self.pagination_frame.pack(side="top", fill="x", pady=5)
+        
+        # Previous page button
+        self.prev_button = ttk.Button(
+            self.pagination_frame, 
+            text="Previous", 
+            command=self.prev_page,
+            state="disabled" if self.current_page == 0 else "normal"
+        )
+        self.prev_button.pack(side="left", padx=5)
+        
+        # Page indicator label
+        self.page_label = ttk.Label(
+            self.pagination_frame, 
+            text=f"Page {self.current_page + 1} of {self.total_pages}"
+        )
+        self.page_label.pack(side="left", padx=5)
+        
+        # Next page button
+        self.next_button = ttk.Button(
+            self.pagination_frame, 
+            text="Next", 
+            command=self.next_page,
+            state="disabled" if self.current_page >= self.total_pages - 1 else "normal"
+        )
+        self.next_button.pack(side="left", padx=5)
+
+        # Display current page content
         start_index = self.current_page * self.items_per_page
         end_index = start_index + self.items_per_page
         current_results = dict(list(self.all_results.items())[start_index:end_index])
 
         for file_name, result in current_results.items():
-            file_frame = tk.Frame(self.results_frame.frame)
-            file_frame.pack(fill="x", expand=True, pady=10)
+            # Create frame for each result
+            result_frame = ttk.Frame(self.results_frame.frame)
+            result_frame.pack(fill="x", expand=True, pady=10)
             
-            header_frame = tk.Frame(file_frame)
+            header_frame = tk.Frame(result_frame)
             header_frame.pack(fill="x")
 
             tk.Label(header_frame, text=f"File: {file_name}", font=('Helvetica', 12, 'bold')).pack(side="left")
@@ -468,21 +515,37 @@ class TranscriptionApp:
             
             tk.Button(header_frame, text="Play Audio", command=lambda fn=file_name: play_audio(os.path.join(self.audio_files_directory, fn + '.wav'))).pack(side="right")
 
-            comparison_frame = tk.Frame(file_frame)
+            comparison_frame = tk.Frame(result_frame)
             comparison_frame.pack(fill="x", expand=True)
 
             comparison_frame.grid_columnconfigure(0, weight=1)
             comparison_frame.grid_columnconfigure(1, weight=1)
 
-            script_label = tk.Label(comparison_frame, text="Original Script")
-            script_label.grid(row=0, column=0, sticky="w")
-
-            asr_label = tk.Label(comparison_frame, text="ASR Result")
-            asr_label.grid(row=0, column=1, sticky="w")
-
             script_text = tk.Text(comparison_frame, height=5, wrap='word', width=text_width, bg="white", fg="black", insertbackground="black")
-            script_text.insert(tk.END, result['script'])
+            
+            # Check if there's a saved modification
+            if file_name in self.text_modifications:
+                script_text.insert(tk.END, self.text_modifications[file_name])
+            else:
+                script_text.insert(tk.END, result['script'])
+                
             script_text.grid(row=1, column=0, padx=(0, 5), pady=5, sticky="nsew")
+
+            def on_text_change(event, fn=file_name):
+                current_text = event.widget.get("1.0", "end-1c")
+                if current_text != result['script']:
+                    self.text_modifications[fn] = current_text
+                    self.modified_scripts[fn] = {
+                        'original': result['script'],
+                        'modified': current_text,
+                        'transcription': result['transcription']
+                    }
+                elif fn in self.text_modifications:
+                    del self.text_modifications[fn]
+                    if fn in self.modified_scripts:
+                        del self.modified_scripts[fn]
+
+            script_text.bind('<KeyRelease>', on_text_change)
 
             asr_text = tk.Text(comparison_frame, height=5, wrap='word', width=text_width, bg="white", fg="black")
             self.highlight_differences(asr_text, result['script'], result['transcription'])
@@ -500,32 +563,10 @@ class TranscriptionApp:
             # Enable editing by default and ensure cursor visibility
             script_text.config(state=tk.NORMAL, insertbackground="black")
 
-            # Store the text widget and original script for later use
-            self.modified_scripts[file_name] = (script_text, result['script'])
-        # Add pagination controls
-        pagination_frame = tk.Frame(self.results_frame.frame)
-        pagination_frame.pack(fill="x", expand=True, pady=10)
+        # Make sure the pagination frame stays on top
+        if hasattr(self, 'pagination_frame'):
+            self.pagination_frame.lift()
 
-        prev_button = tk.Button(pagination_frame, text="Previous", command=self.prev_page)
-        prev_button.pack(side="left")
-
-        next_button = tk.Button(pagination_frame, text="Next", command=self.next_page)
-        next_button.pack(side="right")
-
-        page_label = tk.Label(pagination_frame, text=f"Page {self.current_page + 1} of {self.total_pages}")
-        page_label.pack()
-
-        self.results_frame.frame.update_idletasks()
-        self.results_frame.on_frame_configure(None)
-        self.root.update()
-
-        # Add a global save button
-        global_save_button = tk.Button(self.results_frame.frame, text="Save All Changes", command=self.save_all_modified_scripts)
-        global_save_button.pack(pady=10)
-
-        self.results_frame.frame.update_idletasks()
-        self.results_frame.on_frame_configure(None)
-        self.root.update()
     def prev_page(self):
         if self.current_page > 0:
             self.current_page -= 1
@@ -535,19 +576,19 @@ class TranscriptionApp:
         if self.current_page < self.total_pages - 1:
             self.current_page += 1
             self.display_current_page()
+
     # Set up logging
     logging.basicConfig(level=logging.DEBUG, filename='script_debug.log', filemode='w',
                         format='%(asctime)s - %(levelname)s - %(message)s')
     import openpyxl
     def save_all_modified_scripts(self):
-        debug_info = []
+        print("Starting save_all_modified_scripts function")
+        print(f"Number of modifications tracked: {len(self.text_modifications)}")  # Debug print
         
-        def add_debug(message):
-            print(message)
-            debug_info.append(message)
+        if not self.text_modifications:
+            messagebox.showinfo("No Changes", "No modifications were detected. No file will be saved.")
+            return
 
-        add_debug("Starting save_all_modified_scripts function")
-    
         # Create a new workbook for modified scripts
         new_workbook = openpyxl.Workbook()
         new_sheet = new_workbook.active
@@ -559,72 +600,37 @@ class TranscriptionApp:
             new_sheet.cell(row=1, column=col, value=header)
             new_sheet.cell(row=1, column=col).font = Font(bold=True)
 
-        row = 2  # Start from the second row (after headers)
-
-        # Collect and confirm modified scripts
         modifications = {}
-        for file_name, (script_text_widget, original_script) in self.modified_scripts.items():
-            modified_script = script_text_widget.get("1.0", tk.END).strip()
-            if modified_script != original_script:
-                add_debug(f"Script modified for file: {file_name}")
-                add_debug(f"Original script: {original_script}")
-                add_debug(f"Modified script: {modified_script}")
-
-                # Store the modifications for later review
-                modifications[file_name] = {
-                    'original': original_script,
-                    'modified': modified_script,
-                    'asr': self.all_results[file_name]['transcription']
-                }
-
-        # Show all modifications for review
-        if modifications and self.show_all_comparisons(modifications):
-            for file_name, data in modifications.items():
-                # Add to the new sheet
-                new_sheet.cell(row=row, column=1, value=file_name)
-                new_sheet.cell(row=row, column=2, value=data['original'])
-                new_sheet.cell(row=row, column=3, value=data['asr'])
-                new_sheet.cell(row=row, column=4, value=data['modified'])
-                row += 1
-
-        total_modifications = row - 2
-        add_debug(f"Total modifications: {total_modifications}")
-
-        if total_modifications == 0:
-            messagebox.showinfo("No Changes", "No modifications were confirmed. No file will be saved.")
-            return
-
-        # Save the new workbook
-        save_path = filedialog.asksaveasfilename(
-            defaultextension=".xlsx",
-            filetypes=[("Excel files", "*.xlsx"), ("All files", "*.*")]
-        )
-
-        if save_path:
-            add_debug(f"Save path selected: {save_path}")
+        for file_name, modified_text in self.text_modifications.items():
+            original_script = self.all_results[file_name]['script']
+            asr_result = self.all_results[file_name]['transcription']
             
-            try:
-                new_workbook.save(save_path)
-                add_debug("New workbook with modifications saved successfully")
-                
-                # Notify the user
-                messagebox.showinfo("Success", f"Modified scripts have been saved to a new file. Total modifications: {total_modifications}")
-            except Exception as e:
-                add_debug(f"Error saving workbook: {str(e)}")
-                messagebox.showerror("Error", f"Failed to save workbook: {str(e)}")
+            modifications[file_name] = {
+                'original': original_script,
+                'modified': modified_text,
+                'asr': asr_result
+            }
+
+        if modifications:
+            if self.show_all_comparisons(modifications):
+                row = 2
+                for file_name, data in modifications.items():
+                    new_sheet.cell(row=row, column=1, value=file_name)
+                    new_sheet.cell(row=row, column=2, value=data['original'])
+                    new_sheet.cell(row=row, column=3, value=data['asr'])
+                    new_sheet.cell(row=row, column=4, value=data['modified'])
+                    row += 1
+
+                save_path = filedialog.asksaveasfilename(
+                    defaultextension=".xlsx",
+                    filetypes=[("Excel files", "*.xlsx"), ("All files", "*.*")]
+                )
+                if save_path:
+                    new_workbook.save(save_path)
+                    messagebox.showinfo("Success", 
+                        f"Modified scripts have been saved. Total modifications: {len(modifications)}")
         else:
-            add_debug("Save operation cancelled by user")
-            messagebox.showinfo("Cancelled", "Save operation was cancelled.")
-
-        add_debug("save_all_modified_scripts function completed")
-        
-        # Write debug info to a file
-        with open("debug_log.txt", "w") as f:
-            f.write("\n".join(debug_info))
-        
-        print("Debug information has been written to debug_log.txt")
-
-        return debug_info
+            messagebox.showinfo("No Changes", "No modifications were detected. No file will be saved.")
 
     def show_all_comparisons(self, modifications):
         # Create a new window for comparison
