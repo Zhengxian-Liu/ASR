@@ -181,14 +181,27 @@ def compare_batch(transcriptions, scripts, progress_queue=None):
 def read_scripts_from_excel_files(excel_files, file_name_col, script_text_col):
     scripts = {}
     for excel_file in excel_files:
+        # Read all sheets in the Excel file
         xls = pd.ExcelFile(excel_file)
         for sheet_name in xls.sheet_names:
             df = pd.read_excel(excel_file, sheet_name=sheet_name)
+            
+            # Skip sheet if required columns are not present
+            if file_name_col not in df.columns or script_text_col not in df.columns:
+                print(f"Skipping sheet '{sheet_name}' - required columns not found")
+                continue
+                
             for index, row in df.iterrows():
-                file_name = row[file_name_col]
+                file_name = str(row[file_name_col]).strip()
                 script_text = str(row[script_text_col]).strip()
+                
+                # Skip empty or invalid entries
+                if pd.isna(file_name) or pd.isna(script_text):
+                    continue
+                    
                 scripts[file_name] = script_text
-    print("Completed reading scripts:", scripts)
+                
+    print(f"Completed reading scripts from all sheets. Total entries: {len(scripts)}")
     return scripts
 
 def main(audio_files_directory, excel_files, file_name_col, script_text_col, progress_callback=None):
