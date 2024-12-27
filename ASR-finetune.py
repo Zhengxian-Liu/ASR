@@ -535,7 +535,8 @@ class TranscriptionApp:
             comparison_frame.grid_columnconfigure(1, weight=1)
 
             script_text = tk.Text(comparison_frame, height=5, wrap='word', width=text_width, bg="white", fg="black", insertbackground="black")
-            
+            script_text.config(insertwidth=2)  # Make cursor more visible
+
             # Check if there's a saved modification
             if file_name in self.text_modifications:
                 script_text.insert(tk.END, self.text_modifications[file_name])
@@ -543,6 +544,7 @@ class TranscriptionApp:
                 script_text.insert(tk.END, result['script'])
                 
             script_text.grid(row=1, column=0, padx=(0, 5), pady=5, sticky="nsew")
+            script_text.focus_set()  # Give focus to make cursor visible
 
             def on_text_change(event, fn=file_name):
                 current_text = event.widget.get("1.0", "end-1c")
